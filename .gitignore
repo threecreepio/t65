@@ -1,0 +1,5 @@
+/build
+*.nes
+*.o
+*.a
+*.ppm
