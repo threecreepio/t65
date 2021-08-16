@@ -11,6 +11,7 @@ int nes_loadrom(const char *data, uint32_t size) {
     bin += 0x10;
     if (strncmp(header, "NES\x1A", 4)) {
         // assume NROM
+        memset(header, 0, 0x10);
         bin -= 0x10;
         header[0x4] = 2;
         header[0x5] = 0;

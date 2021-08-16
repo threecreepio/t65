@@ -17,19 +17,29 @@ void nescpu_printstate() {
             case AM_IMM:
                 printf("#$%02X            ", nescpu_readmemval(pcbefore + 1));
                 break;
-            case AM_INX: case AM_INXW: case AM_ZPX:
-                printf("(#%02X),X         ", nescpu_readmemval(pcbefore + 1));
+            case AM_INX:
+            case AM_INXW:
+                printf("($%02X,X)         ", nescpu_readmemval(pcbefore + 1));
                 break;
-            case AM_INY: case AM_INYW: case AM_ZPY:
-                printf("(#$%02X),Y        ", nescpu_readmemval(pcbefore + 1));
+            case AM_INY:
+            case AM_INYW:
+                printf("($%02X),Y         ", nescpu_readmemval(pcbefore + 1));
                 break;
             case AM_ABS:
                 printf("$%02X%02X           ", nescpu_readmemval(pcbefore + 2), nescpu_readmemval(pcbefore + 1));
                 break;
-            case AM_ABX: case AM_ABXW:
+            case AM_ZPX:
+                printf("$%02X,X           ", nescpu_readmemval(pcbefore + 1));
+                break;
+            case AM_ABX:
+            case AM_ABXW:
                 printf("$%02X%02X,X         ", nescpu_readmemval(pcbefore + 2), nescpu_readmemval(pcbefore + 1));
                 break;
-            case AM_ABY: case AM_ABYW:
+            case AM_ZPY:
+                printf("$%02X,Y           ", nescpu_readmemval(pcbefore + 1));
+                break;
+            case AM_ABY:
+            case AM_ABYW:
                 printf("$%02X%02X,Y         ", nescpu_readmemval(pcbefore + 2), nescpu_readmemval(pcbefore + 1));
                 break;
             case AM_REL:
