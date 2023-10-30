@@ -21,6 +21,7 @@ void nes_reset(bool hard) {
     nescpu_reset();
     nesppu_reset();
     nesapu_reset();
+    nes.cpu.cycles = 0;
 }
 
 void nes_step(void) {

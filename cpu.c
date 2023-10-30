@@ -602,6 +602,16 @@ void in_branch(union splitreg am_value) {
 int run_instruction(uint8_t in, union splitreg am_value) {
     int retval = CPUSTEP_OK;
     switch (in) {
+        case IN_SED:
+            nes.cpu.ps.bits.d = 1;
+            retval = CPUSTEP_BRK;
+            break;
+
+        case IN_CLD:
+            nes.cpu.ps.bits.d = 0;
+            nes.cpu.cycles = 0;
+            break;
+
         case IN_BRK:
             {
                 nescpu_readmem(nes.cpu.pc.full);
@@ -975,15 +985,10 @@ int run_instruction(uint8_t in, union splitreg am_value) {
             break;
 
         case IN_CLC: nes.cpu.ps.bits.c = 0; break;
-        case IN_CLD:
-            nes.cpu.ps.bits.d = 0;
-            retval = CPUSTEP_CLD;
-            break;
         case IN_CLI: nes.cpu.ps.bits.i = 0; break;
         case IN_CLV: nes.cpu.ps.bits.v = 0; break;
 
         case IN_SEC: nes.cpu.ps.bits.c = 1; break;
-        case IN_SED: nes.cpu.ps.bits.d = 1; break;
         case IN_SEI: nes.cpu.ps.bits.i = 1; break;
 
         case IN_TAX:
