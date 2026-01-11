@@ -45,9 +45,9 @@ Should build in any normal posix-y environment.
 git clone https://www.github.com/threecreepio/t65
 cd t65
 make
-make install
+make install # you can just copy the t65 binary wherever, this copies to /usr/local/bin
 
-t65 examples/helloworld.s -q
+./t65 examples/helloworld.s -q
 ```
 
 
