@@ -47,9 +47,6 @@ void mapper000_reset_h() {
 }
 
 void mapper000_writemem(uint16_t addr, uint8_t value) {
-    if ((addr & 0xF000) == 0x3000) {
-        nes.breaking = 1;
-    }
 }
 
 void mapper000_initialize() {

@@ -604,7 +604,6 @@ int run_instruction(uint8_t in, union splitreg am_value) {
     switch (in) {
         case IN_SED:
             nes.cpu.ps.bits.d = 1;
-            retval = CPUSTEP_BRK;
             break;
 
         case IN_CLD:
@@ -1123,6 +1122,7 @@ int run_instruction(uint8_t in, union splitreg am_value) {
             nes.cpu.pc.value.lo = nescpu_readmem(0x100 | ++ nes.cpu.rsp);
             nes.cpu.pc.value.hi = nescpu_readmem(0x100 | ++ nes.cpu.rsp);
             nescpu_readmem(nes.cpu.pc.full ++);
+            if (nes.cpu.rsp == 0xFF) retval = CPUSTEP_RTS;
             break;
 
         case IN_RTI:
@@ -1202,7 +1202,8 @@ int run_instruction(uint8_t in, union splitreg am_value) {
             break;
 
         case IN_NOP:
-            return 0;
+            retval = CPUSTEP_NOP;
+            break;
 
         case IX_HLT:
         case IX_UNK:

@@ -1,30 +1,53 @@
-Terminal 6502 simulator
+# Terminal 6502
 
-Work in progress 6502 cpu simulator, requires cc65 to be installed.
+Simple 6502 emulator for running in terminal.
 
-Download a release from https://github.com/threecreepio/t65/releases
+It can read simple NROM NES ROMS or compile and run assembly files with asm6 by loopy (https://github.com/parasyte/asm6/tree/master)
 
-Usage:
-With t65 in your path, you can write:
+## Usage
+
+`t65 [--quiet] <inputfile>`
+
+The quiet flag will disable the CPU tracelog output.
+
+An input file ending in .s or .asm is assumed to be an assembly file. Anything else will be loaded as an NES NROM.
+
+## Special handling
+
+Whenever a BRK or NOP instruction is executed, execution will halt until an input is pressed.
+
+If an RTS is executed from the top of the stack the program will exit with the A register as its exit code.
+
+There are custom registers to perform useful things, just one, really:
+
+`$5000` - print an ASCII character to the terminal
+
+## Example source file
+
 ```
-t65 example.s
+@Continue:
+lda HelloWorldASCII,y  ; fetch each ascii character
+beq @Done              ; loop until null terminator found
+sta $5000              ; print character
+iny                    ; and advance
+bne @Continue          ;
+@Done:
+rts                    ; rts to exit, exit code is the A register, 0 in this case
+HelloWorldASCII:
+.byte "Hello, World.",$0A,$00
 ```
 
-This will attempt to build example.s using ca65, then runs the result.
+## Building
 
-The program will run until a CLD, BRK or undocumented instruction is executed.
-To end execution, press Ctrl-C.
+Should build in any normal posix-y environment.
 
-Intallation:
-Copy the files from the release to a location on your path.
-
-If building from source, use cmake:
 ```
-mkdir build
-cd build
-cmake ..
-```
+git clone https://www.github.com/threecreepio/t65
+cd t65
+make
+make install
 
-Then either `make` if available, or use visual studio.
+t65 examples/helloworld.s -q
+```
 
 

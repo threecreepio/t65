@@ -8,10 +8,11 @@ struct nes;
 #define CPUSTEP_OK 0
 #define CPUSTEP_NMI 0x80
 #define CPUSTEP_BRK 2
-#define CPUSTEP_CLD 4
 #define CPUSTEP_INVALID 3
+#define CPUSTEP_RTS 4
+#define CPUSTEP_NOP 5
 
-uint16_t NESCPU_OPS[0x100];
+extern uint16_t NESCPU_OPS[0x100];
 
 enum NESAddressingModes {
     AM_NON  =  0 << 7,
@@ -264,7 +265,6 @@ struct nes {
     struct nesapu apu;
     struct nesinput input[2];
 
-    uint8_t breaking;
     uint8_t prgrom[0x800][0x1000];
     uint8_t prgram[0x100][0x1000];
     uint8_t chrrom[0x1000][0x400];
@@ -283,6 +283,7 @@ uint8_t nescpu_readmem(uint16_t addr);
 void nescpu_writemem(uint16_t addr, uint8_t value);
 void nescpu_printstate(void);
 int nescpu_step(void);
+uint8_t nescpu_readmemval(uint16_t addr);
 
 void nesppu_initialize(void);
 void nesppu_poweron(void);
