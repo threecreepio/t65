@@ -1,4 +1,4 @@
-PRINT         = $5000   ; print to terminal
+PRINT         = $5000   ; print to stdout
 CURRENT       = $1      ; tracks current iteration
 MODULO_TMP    = $2      ; temp value for modulo calculation
 MODCHECK      = $3      ; divisibility flag
@@ -23,7 +23,7 @@ MODCHECK      = $3      ; divisibility flag
     jsr PrintBuzz       ; aaand print our buzz value
 
 @PrintValue:
-    lda MODCHECK        ; check if we were divisibly by 3 or 5
+    lda MODCHECK        ; check if we were evenly divisible by 3 or 5
     bne @Advance        ; if we were - skip ahead
     lda CURRENT         ; otherwise reload current value
     jsr PrintBCD        ; and print it as a decimal value
