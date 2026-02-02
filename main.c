@@ -28,12 +28,18 @@ void t65_writemem(uint16_t address, uint8_t value) {
         printf("%c", value);
         fflush(stdout);
     }
-    // 5001 toggles tracing
+    // 5001 toggles tracing and clears cycle counters
     else if (reg == 0x01) {
+        sys.cpu.cycles = 0;
+        sys.cpu.cycles2 = 0;
         trace = value ? 1 : 0;
     }
     // 5002 triggers a break
     else if (reg == 0x02) {
+        if (!trace) {
+            sys.cpu.cycles = 0;
+            sys.cpu.cycles2 = 0;
+        }
         trace = 1;
         mode = 27;
     }
