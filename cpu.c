@@ -35,7 +35,7 @@ uint16_t syscpu_ops[0x100] = {
 /* 1d: */ AM_ABX | IN_ORA,
 /* 1e: */ AM_ABXW | IN_ASL,
 /* 1f: */ AM_ABXW | IX_SLO,
-/* 20: */ AM_NON | IN_JSR,
+/* 20: */ AM_ABS | IN_JSR,
 /* 21: */ AM_INX | IN_AND,
 /* 22: */ AM_NON | IX_HLT,
 /* 23: */ AM_INX | IX_RLA,
@@ -267,6 +267,7 @@ void syscpu_cycle(void) {
 }
 
 inline void syscpu_writemem(uint16_t addr, uint8_t value) {
+    syscpu_cycle();
     if (addr < 0x5000) {
         sys.cpu.memory[addr & 0x7FFF] = value;
     }
@@ -992,12 +993,11 @@ int run_instruction(uint8_t in, union splitreg am_value) {
 
         case IN_JSR:
             {
-                uint8_t v = syscpu_readmem(sys.cpu.pc.full ++);
-                syscpu_readmem(0x100 | sys.cpu.rsp);
-                syscpu_writemem(0x100 | sys.cpu.rsp --, sys.cpu.pc.value.hi);
-                syscpu_writemem(0x100 | sys.cpu.rsp --, sys.cpu.pc.value.lo);
-                sys.cpu.pc.value.hi = syscpu_readmem(sys.cpu.pc.full);
-                sys.cpu.pc.value.lo = v;
+                uint16_t returnaddr = sys.cpu.pc.full - 1;
+                syscpu_readmem(0x100 | sys.cpu.rsp); // dummy read
+                syscpu_writemem(0x100 | sys.cpu.rsp --, (returnaddr >> 8) & 0xFF);
+                syscpu_writemem(0x100 | sys.cpu.rsp --, returnaddr & 0xFF);
+                sys.cpu.pc.full = am_value.full;
             }
             break;
 

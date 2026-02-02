@@ -1,12 +1,12 @@
 # Terminal 6502
 
-Simple 6502 emulator for running in terminal.
+A simple 6502 emulator that runs in the terminal.
 
-Compiles and runs assembly files with asm6 by loopy (https://github.com/parasyte/asm6/tree/master)
+Compiles and runs assembly files with **asm6** by loopy (https://github.com/parasyte/asm6)
 
 ## Usage
 
-`t65 [--quiet] <inputfile>`
+`t65 [-q|--quiet] <inputfile>`
 
 The quiet flag will disable the CPU tracelog output.
 
@@ -15,13 +15,27 @@ The input should be a single assembly file, which will be loaded at $8000.
 ## Tracelog format
 
 ```
-$8000> LDA $800C,Y         A:00 X:00 Y:00 S:FD P:I       CYC:0
-$8003> BEQ $800B           A:48 X:00 Y:00 S:FD P:I       CYC:4
-$8005> STA $5000           A:48 X:00 Y:00 S:FD P:I       CYC:6
-H
+$8045> 60       |       RTS                                 A:01 X:00 Y:0A S:F9 P:I..C.. CYC:   133 (+3) 
+$8071> E0 00    |     CPX #$00                              A:01 X:00 Y:0A S:FB P:I..C.. CYC:   139 (+6) 
+$8073> F0 09 48 |     BEQ $807E                             A:01 X:00 Y:0A S:FB P:IZ.C.. CYC:   141 (+2) 
+$807E> 18       |     CLC                                   A:01 X:00 Y:0A S:FB P:IZ.C.. CYC:   144 (+3) 
+$807F> 69 30    |     ADC #$30                              A:01 X:00 Y:0A S:FB P:IZ.... CYC:   146 (+2) 
+$8081> 8D 00 50 |     STA $5000                             A:31 X:00 Y:0A S:FB P:I..... CYC:   148 (+2) 1
+$8084> 60       |     RTS                                   A:31 X:00 Y:0A S:FB P:I..... CYC:   152 (+4) 
+$8027> A9 0A    |   LDA #$0A                                A:31 X:00 Y:0A S:FD P:I..... CYC:   158 (+6) 
 ```
 
-Prints out the register state, number of executed cycles, and the next instruction that will run.
+Layout:
+
+```
+<PC> <opcode bytes> | <indent><mnemonic operands> <registers> <flags> CYC:<cpu cycles> (+<delta>) [output]
+```
+
+Each trace line shows the next instruction to execute, its raw opcode bytes, call depth, register and flag state, total CPU cycle count, and the cycle cost of the previously executed instruction.
+
+The instruction shown is the next instruction that will run; the register and flag state reflect the CPU state immediately before that instruction executes.
+
+Trace output is written to stderr.
 
 ## Special handling
 
@@ -31,7 +45,7 @@ If an RTS is executed from the top of the stack the program will exit with the A
 
 There are custom registers to perform useful things.
 
-`$5000` - print an ASCII character to the terminal
+`$5000` - print an ASCII character to stdout
 `$5001` - switch tracing on (1) or off (0)
 `$5002` - enable tracing and trigger breakpoint
 `$5003` - exit application with a return code
@@ -46,7 +60,7 @@ sta $5000              ; print character
 iny                    ; and advance
 bne @Continue          ;
 @Done:
-rts                    ; rts to exit, exit code is the A register, 0 in this case
+rts                    ; exit program, exit code is the A register, 0 in this case
 HelloWorldASCII:
 .byte "Hello, World.",$0A,$00
 ```

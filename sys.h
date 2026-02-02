@@ -74,8 +74,10 @@ struct syscpu {
     uint8_t ra, rx, ry, rsp;
     union syscpu_flags ps;
     union splitreg pc;
-    uint32_t cycles;
     uint8_t wantirq, lastirq;
+
+    uint32_t cycles;
+    uint32_t cycles2;
 };
 
 struct sys {
