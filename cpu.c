@@ -1,9 +1,8 @@
-#include "nes.h"
-#include <stdio.h>
+#include "sys.h"
+#include <assert.h>
 #include <string.h>
-#include <stdlib.h>
 
-uint16_t NESCPU_OPS[0x100] = {
+uint16_t syscpu_ops[0x100] = {
 /* 00: */ AM_IMP | IN_BRK,
 /* 01: */ AM_INX | IN_ORA,
 /* 02: */ AM_NON | IX_HLT,
@@ -262,154 +261,43 @@ uint16_t NESCPU_OPS[0x100] = {
 /* ff: */ AM_ABXW | IX_ISB
 };
 
-void nescpu_cycle(void) {
-    nes.cpu.lastnmi = nes.cpu.wantnmi;
-    nes.cpu.lastirq = nes.cpu.wantirq && !nes.cpu.ps.bits.i;
-    if (nes.mapper.cpucycle) {
-        nes.mapper.cpucycle();
-    }
-    nes.cpu.cycles += 1;
-    nesppu_runcycle();
-    nesapu_runcycle();
+void syscpu_cycle(void) {
+    sys.cpu.lastirq = sys.cpu.wantirq && !sys.cpu.ps.bits.i;
+    sys.cpu.cycles += 1;
 }
 
-
-inline void nescpu_writemem(uint16_t addr, uint8_t value) {
-    nescpu_cycle();
-    switch (addr >> 12) {
-        case 0x0:
-        case 0x1:
-            nes.cpu.ram[addr & 0x7FF] = value;
-            break;
-        case 0x2:
-        case 0x3:
-            nesppu_writemem(addr - 0x2000, value);
-            break;
-        case 0x4:
-        case 0x5:
-        case 0x6:
-        case 0x7:
-            nesapu_writemem(addr, value);
-            break;
+inline void syscpu_writemem(uint16_t addr, uint8_t value) {
+    if (addr < 0x5000) {
+        sys.cpu.memory[addr & 0x7FFF] = value;
     }
-    nes.mapper.writemem(addr, value);
+    if (sys.writemem != NULL) {
+        sys.writemem(addr, value);
+    }
 }
 
-uint8_t nescpu_readmemval(uint16_t addr) {
-    uint8_t rval = 0xFF;
-    uint8_t bank = addr >> 12;
-
-    switch (bank) {
-        case 0x0:
-        case 0x1:
-            rval = nes.cpu.ram[addr & 0x7FF];
-            break;
-        case 0x2:
-        case 0x3:
-            rval = nesppu_readmem(addr - 0x2000);
-            break;
-        case 0x4:
-        case 0x5:
-        case 0x6:
-        case 0x7:
-            rval = nesapu_readmem(addr);
-            break;
-        case 0x8:
-        case 0x9:
-        case 0xA:
-        case 0xB:
-        case 0xC:
-        case 0xD:
-        case 0xE:
-        case 0xF:
-            rval = nes.cpu.bankdata[bank][addr & 0xFFF];
-            break;
+uint8_t syscpu_readmemval(uint16_t addr) {
+    if (addr < 0x5000) {
+        return sys.cpu.memory[addr & 0x7FFF];
+    } else if (addr >= 0x8000) {
+        return sys.rom[addr & 0x7FFF];
     }
-    return rval;
-}
-inline uint8_t nescpu_readmem(uint16_t addr) {
-    if (nes.cpu.dma) {
-        if ((nes.cpu.dma & (DMA_PCM | DMA_SPR)) == DMA_PCM) {
-            bool readingController = (addr == 0x4016) || (addr == 0x4017);
-            nes.cpu.dma &= ~DMA_PCM;
-            nescpu_readmem(addr);
-            
-            if (readingController) {
-                nescpu_cycle();
-            } else {
-                nescpu_readmem(addr);
-            }
-
-            if (!(nes.apu.clock & 1)) {
-                if (readingController) {
-                    nescpu_cycle();
-                } else {
-                    nescpu_readmem(addr);
-                }
-            }
-
-            nesapu_dpcmfetch();
-        }
-        if (nes.cpu.dma & DMA_SPR) {
-            bool wasPCM = (nes.cpu.dma & DMA_PCM);
-            nes.cpu.dma = 0;
-            nescpu_readmem(addr);
-            wasPCM |= (nes.cpu.dma & DMA_PCM);
-            nes.cpu.dma = 0;
-            if (!(nes.apu.clock & 1)) {
-                nescpu_readmem(addr);
-            }
-            for (int i = 0; i < 0x100; i++) {
-                if (wasPCM) {
-                    nesapu_dpcmfetch();
-                    nescpu_readmem(addr);
-                    wasPCM = 0;
-                } else {
-                    // check for PCM DMA and schedule it for the next loop
-                    wasPCM = (nes.cpu.dma & DMA_PCM);
-                    nes.cpu.dma = 0;
-                }
-                uint8_t val = nescpu_readmem((nes.cpu.dmapage << 8) | i);
-                nescpu_writemem(0x2004, val);
-            }
-            if (wasPCM) {
-                nesapu_dpcmfetch();
-                nescpu_readmem(addr);
-            }
-        }
-    }
-
-    nescpu_cycle();
-    return nescpu_readmemval(addr);
+    return 0;
 }
 
-void nescpu_donmi(void) {
-    nes.cpu.dbg_nmicounter += 1;
-    nescpu_readmem(nes.cpu.pc.full);
-    nescpu_readmem(nes.cpu.pc.full);
-    nescpu_writemem(0x100 | nes.cpu.rsp --, nes.cpu.pc.value.hi);
-    nescpu_writemem(0x100 | nes.cpu.rsp --, nes.cpu.pc.value.lo);
-    nescpu_writemem(0x100 | nes.cpu.rsp --, nes.cpu.ps.field);
-    nes.cpu.ps.bits.i = 1;
-    nes.cpu.pc.value.lo = nescpu_readmem(0xFFFA);
-    nes.cpu.pc.value.hi = nescpu_readmem(0xFFFB);
+inline uint8_t syscpu_readmem(uint16_t addr) {
+    syscpu_cycle();
+    return syscpu_readmemval(addr);
 }
 
-void nescpu_doirq(void) {
-    nescpu_readmem(nes.cpu.pc.full);
-    nescpu_readmem(nes.cpu.pc.full);
-    nescpu_writemem(0x100 | nes.cpu.rsp --, nes.cpu.pc.value.hi);
-    nescpu_writemem(0x100 | nes.cpu.rsp --, nes.cpu.pc.value.lo);
-    nescpu_writemem(0x100 | nes.cpu.rsp --, nes.cpu.ps.field);
-    nes.cpu.ps.bits.i = 1;
-    if (nes.cpu.wantnmi) {
-        nes.cpu.wantnmi = false;
-        nes.cpu.pc.value.lo = nescpu_readmem(0xFFFA);
-        nes.cpu.pc.value.hi = nescpu_readmem(0xFFFB);
-    } else {
-        nes.cpu.pc.value.lo = nescpu_readmem(0xFFFE);
-        nes.cpu.pc.value.hi = nescpu_readmem(0xFFFF);
-    }
+void syscpu_doirq(void) {
+    syscpu_readmem(sys.cpu.pc.full);
+    syscpu_readmem(sys.cpu.pc.full);
+    syscpu_writemem(0x100 | sys.cpu.rsp --, sys.cpu.pc.value.hi);
+    syscpu_writemem(0x100 | sys.cpu.rsp --, sys.cpu.pc.value.lo);
+    syscpu_writemem(0x100 | sys.cpu.rsp --, sys.cpu.ps.field);
+    sys.cpu.ps.bits.i = 1;
+    sys.cpu.pc.value.lo = syscpu_readmem(0xFFFE);
+    sys.cpu.pc.value.hi = syscpu_readmem(0xFFFF);
 }
 
 
@@ -420,58 +308,58 @@ union splitreg run_addressingmode(uint16_t am) {
         // NONE
         case AM_NON: break;
 
-        // IMPLIED
+        // IMPLICIT
         case AM_IMP:
-            nescpu_readmem(nes.cpu.pc.full);
+            syscpu_readmem(sys.cpu.pc.full);
             break;
 
         // IMMEDIATE
         case AM_IMM:
             {
-                am_value.full = nes.cpu.pc.full ++;
+                am_value.full = sys.cpu.pc.full ++;
             }
             break;
 
         case AM_REL:
             {
-                am_value.value.lo = nescpu_readmem(nes.cpu.pc.full ++);
+                am_value.value.lo = syscpu_readmem(sys.cpu.pc.full ++);
             }
             break;
 
         // ZERO PAGE
         case AM_ZPG:
-            am_value.value.lo = nescpu_readmem(nes.cpu.pc.full ++);
+            am_value.value.lo = syscpu_readmem(sys.cpu.pc.full ++);
             break;
 
         // ZERO PAGE, X
         case AM_ZPX:
-            am_value.value.lo = nescpu_readmem(nes.cpu.pc.full ++);
-            nescpu_readmem(am_value.full);
-            am_value.value.lo += nes.cpu.rx;
+            am_value.value.lo = syscpu_readmem(sys.cpu.pc.full ++);
+            syscpu_readmem(am_value.full);
+            am_value.value.lo += sys.cpu.rx;
             break;
 
         // ZERO PAGE, Y
         case AM_ZPY:
-            am_value.full = nescpu_readmem(nes.cpu.pc.full ++);
-            nescpu_readmem(am_value.full);
-            am_value.value.lo += nes.cpu.ry;
+            am_value.full = syscpu_readmem(sys.cpu.pc.full ++);
+            syscpu_readmem(am_value.full);
+            am_value.value.lo += sys.cpu.ry;
             break;
 
         // ABSOLUTE
         case AM_ABS:
-            am_value.value.lo = nescpu_readmem(nes.cpu.pc.full ++);
-            am_value.value.hi = nescpu_readmem(nes.cpu.pc.full ++);
+            am_value.value.lo = syscpu_readmem(sys.cpu.pc.full ++);
+            am_value.value.hi = syscpu_readmem(sys.cpu.pc.full ++);
             break;
 
         // ABSOLUTE, X
         case AM_ABX:
             {
-                am_value.value.lo = nescpu_readmem(nes.cpu.pc.full ++);
-                am_value.value.hi = nescpu_readmem(nes.cpu.pc.full ++);
-                bool carry = ((int) am_value.value.lo + nes.cpu.rx) >= 0x100;
-                am_value.value.lo += nes.cpu.rx;
+                am_value.value.lo = syscpu_readmem(sys.cpu.pc.full ++);
+                am_value.value.hi = syscpu_readmem(sys.cpu.pc.full ++);
+                bool carry = ((int) am_value.value.lo + sys.cpu.rx) >= 0x100;
+                am_value.value.lo += sys.cpu.rx;
                 if (carry) {
-                    nescpu_readmem(am_value.full);
+                    syscpu_readmem(am_value.full);
                     am_value.value.hi += 1;
                 }
             }
@@ -480,12 +368,12 @@ union splitreg run_addressingmode(uint16_t am) {
         // ABSOLUTE, Y
         case AM_ABY:
             {
-                am_value.value.lo = nescpu_readmem(nes.cpu.pc.full ++);
-                am_value.value.hi = nescpu_readmem(nes.cpu.pc.full ++);
-                bool carry = ((int) am_value.value.lo + nes.cpu.ry) >= 0x100;
-                am_value.value.lo += nes.cpu.ry;
+                am_value.value.lo = syscpu_readmem(sys.cpu.pc.full ++);
+                am_value.value.hi = syscpu_readmem(sys.cpu.pc.full ++);
+                bool carry = ((int) am_value.value.lo + sys.cpu.ry) >= 0x100;
+                am_value.value.lo += sys.cpu.ry;
                 if (carry) {
-                    nescpu_readmem(am_value.full);
+                    syscpu_readmem(am_value.full);
                     am_value.value.hi += 1;
                 }
             }
@@ -493,11 +381,11 @@ union splitreg run_addressingmode(uint16_t am) {
 
         case AM_ABXW:
             {
-                am_value.value.lo = nescpu_readmem(nes.cpu.pc.full ++);
-                am_value.value.hi = nescpu_readmem(nes.cpu.pc.full ++);
-                bool carry = ((int) am_value.value.lo + nes.cpu.rx) >= 0x100;
-                am_value.value.lo += nes.cpu.rx;
-                nescpu_readmem(am_value.full);
+                am_value.value.lo = syscpu_readmem(sys.cpu.pc.full ++);
+                am_value.value.hi = syscpu_readmem(sys.cpu.pc.full ++);
+                bool carry = ((int) am_value.value.lo + sys.cpu.rx) >= 0x100;
+                am_value.value.lo += sys.cpu.rx;
+                syscpu_readmem(am_value.full);
                 if (carry) {
                     am_value.value.hi += 1;
                 }
@@ -506,11 +394,11 @@ union splitreg run_addressingmode(uint16_t am) {
 
         case AM_ABYW:
             {
-                am_value.value.lo = nescpu_readmem(nes.cpu.pc.full ++);
-                am_value.value.hi = nescpu_readmem(nes.cpu.pc.full ++);
-                bool carry = ((int) am_value.value.lo + nes.cpu.ry) >= 0x100;
-                am_value.value.lo += nes.cpu.ry;
-                nescpu_readmem(am_value.full);
+                am_value.value.lo = syscpu_readmem(sys.cpu.pc.full ++);
+                am_value.value.hi = syscpu_readmem(sys.cpu.pc.full ++);
+                bool carry = ((int) am_value.value.lo + sys.cpu.ry) >= 0x100;
+                am_value.value.lo += sys.cpu.ry;
+                syscpu_readmem(am_value.full);
                 if (carry) {
                     am_value.value.hi += 1;
                 }
@@ -523,12 +411,12 @@ union splitreg run_addressingmode(uint16_t am) {
             {
                 union splitreg tmp;
                 tmp.value.hi = 0;
-                tmp.value.lo = nescpu_readmem(nes.cpu.pc.full ++);
-                nescpu_readmem(tmp.full);
-                tmp.value.lo += nes.cpu.rx;
-                am_value.value.lo = nescpu_readmem(tmp.full);
+                tmp.value.lo = syscpu_readmem(sys.cpu.pc.full ++);
+                syscpu_readmem(tmp.full);
+                tmp.value.lo += sys.cpu.rx;
+                am_value.value.lo = syscpu_readmem(tmp.full);
                 tmp.value.lo += 1;
-                am_value.value.hi = nescpu_readmem(tmp.full);
+                am_value.value.hi = syscpu_readmem(tmp.full);
                 am_value.full = am_value.full;
             }
             break;
@@ -538,14 +426,14 @@ union splitreg run_addressingmode(uint16_t am) {
             {
                 union splitreg tmp;
                 tmp.value.hi = 0;
-                tmp.value.lo = nescpu_readmem(nes.cpu.pc.full ++);
-                am_value.value.lo = nescpu_readmem(tmp.full);
+                tmp.value.lo = syscpu_readmem(sys.cpu.pc.full ++);
+                am_value.value.lo = syscpu_readmem(tmp.full);
                 tmp.value.lo += 1;
-                am_value.value.hi = nescpu_readmem(tmp.full);
-                bool carry = ((int)am_value.value.lo + nes.cpu.ry) >= 0x100;
-                am_value.value.lo += nes.cpu.ry;
+                am_value.value.hi = syscpu_readmem(tmp.full);
+                bool carry = ((int)am_value.value.lo + sys.cpu.ry) >= 0x100;
+                am_value.value.lo += sys.cpu.ry;
                 if (carry) {
-                    nescpu_readmem(am_value.full);
+                    syscpu_readmem(am_value.full);
                     am_value.value.hi += 1;
                 }
             }
@@ -555,13 +443,13 @@ union splitreg run_addressingmode(uint16_t am) {
             {
                 union splitreg tmp;
                 tmp.value.hi = 0;
-                tmp.value.lo = nescpu_readmem(nes.cpu.pc.full ++);
-                am_value.value.lo = nescpu_readmem(tmp.full);
+                tmp.value.lo = syscpu_readmem(sys.cpu.pc.full ++);
+                am_value.value.lo = syscpu_readmem(tmp.full);
                 tmp.value.lo += 1;
-                am_value.value.hi = nescpu_readmem(tmp.full);
-                bool carry = ((int)am_value.value.lo + nes.cpu.ry) >= 0x100;
-                am_value.value.lo += nes.cpu.ry;
-                nescpu_readmem(am_value.full);
+                am_value.value.hi = syscpu_readmem(tmp.full);
+                bool carry = ((int)am_value.value.lo + sys.cpu.ry) >= 0x100;
+                am_value.value.lo += sys.cpu.ry;
+                syscpu_readmem(am_value.full);
                 if (carry) {
                     am_value.value.hi += 1;
                 }
@@ -577,24 +465,24 @@ union splitreg run_addressingmode(uint16_t am) {
 }
 
 void in_branch(union splitreg am_value) {
-    nescpu_readmem(nes.cpu.pc.full);
+    syscpu_readmem(sys.cpu.pc.full);
     uint8_t rel = am_value.value.lo;
-    bool carry = ((int) nes.cpu.pc.value.lo + rel) >= 0x100;
-    nes.cpu.pc.value.lo += rel;
+    bool carry = ((int) sys.cpu.pc.value.lo + rel) >= 0x100;
+    sys.cpu.pc.value.lo += rel;
     if (rel & 0b10000000)
     {
         if (!carry)
         {
-            nescpu_readmem(nes.cpu.pc.full);
-            nes.cpu.pc.value.hi --;
+            syscpu_readmem(sys.cpu.pc.full);
+            sys.cpu.pc.value.hi --;
         }
     }
     else
     {
         if (carry)
         {
-            nescpu_readmem(nes.cpu.pc.full);
-            nes.cpu.pc.value.hi ++;
+            syscpu_readmem(sys.cpu.pc.full);
+            sys.cpu.pc.value.hi ++;
         }
     }
 }
@@ -603,61 +491,57 @@ int run_instruction(uint8_t in, union splitreg am_value) {
     int retval = CPUSTEP_OK;
     switch (in) {
         case IN_SED:
-            nes.cpu.ps.bits.d = 1;
+            if (sys.cpu.ps.bits.d == 0) {
+                fprintf(stderr, "Warning: Decimal mode not supported\n");
+            }
+            sys.cpu.ps.bits.d = 1;
             break;
 
         case IN_CLD:
-            nes.cpu.ps.bits.d = 0;
-            nes.cpu.cycles = 0;
+            sys.cpu.ps.bits.d = 0;
+            sys.cpu.cycles = 0;
             break;
 
         case IN_BRK:
             {
-                nescpu_readmem(nes.cpu.pc.full);
-                nescpu_writemem(0x100 | nes.cpu.rsp --, nes.cpu.pc.value.hi);
-                nescpu_writemem(0x100 | nes.cpu.rsp --, nes.cpu.pc.value.lo);
-                nescpu_writemem(0x100 | nes.cpu.rsp --, nes.cpu.ps.field);
-                nes.cpu.ps.bits.i = 1;
-                if (nes.cpu.lastnmi) {
-                    nes.cpu.wantnmi = false;
-                    nes.cpu.pc.value.lo = nescpu_readmem(0xFFFA);
-                    nes.cpu.pc.value.hi = nescpu_readmem(0xFFFB);
-                } else {
-                    nes.cpu.pc.value.lo = nescpu_readmem(0xFFFE);
-                    nes.cpu.pc.value.hi = nescpu_readmem(0xFFFF);
-                }
-                nes.cpu.lastnmi = false;
+                syscpu_readmem(sys.cpu.pc.full);
+                syscpu_writemem(0x100 | sys.cpu.rsp --, sys.cpu.pc.value.hi);
+                syscpu_writemem(0x100 | sys.cpu.rsp --, sys.cpu.pc.value.lo);
+                syscpu_writemem(0x100 | sys.cpu.rsp --, sys.cpu.ps.field);
+                sys.cpu.ps.bits.i = 1;
+                sys.cpu.pc.value.lo = syscpu_readmem(0xFFFE);
+                sys.cpu.pc.value.hi = syscpu_readmem(0xFFFF);
                 retval = CPUSTEP_BRK;
             }
             break;
 
         case IN_ADC:
             {
-                uint8_t v = nescpu_readmem(am_value.full);
-                uint16_t preva = nes.cpu.ra;
-                uint16_t result = preva + v + nes.cpu.ps.bits.c;
-                nes.cpu.ra = result & 0xFF;
-                nes.cpu.ps.bits.v = !!(~(preva ^ v) & (preva ^ result) & 0x80);
-                nes.cpu.ps.bits.c = !!(result & 0x100);
-                nes.cpu.ps.bits.z = !nes.cpu.ra;
-                nes.cpu.ps.bits.n = nes.cpu.ra & 0b10000000;
+                uint8_t v = syscpu_readmem(am_value.full);
+                uint16_t preva = sys.cpu.ra;
+                uint16_t result = preva + v + sys.cpu.ps.bits.c;
+                sys.cpu.ra = result & 0xFF;
+                sys.cpu.ps.bits.v = !!(~(preva ^ v) & (preva ^ result) & 0x80);
+                sys.cpu.ps.bits.c = !!(result & 0x100);
+                sys.cpu.ps.bits.z = !sys.cpu.ra;
+                sys.cpu.ps.bits.n = sys.cpu.ra & 0b10000000;
             }
             break;
 
 
         case IX_ISB:
             {
-                uint8_t v = nescpu_readmem(am_value.full);
-                nescpu_writemem(am_value.full, v);
+                uint8_t v = syscpu_readmem(am_value.full);
+                syscpu_writemem(am_value.full, v);
                 v += 1;
-                uint16_t preva = nes.cpu.ra;
-                uint16_t result = preva + (~v) + (nes.cpu.ps.bits.c);
-                nes.cpu.ra = result & 0xFF;
-                nes.cpu.ps.bits.v = !!((preva ^ v) & (preva ^ result) & 0x80);
-                nes.cpu.ps.bits.c = !(result & 0x100);
-                nes.cpu.ps.bits.z = !(nes.cpu.ra);
-                nes.cpu.ps.bits.n = nes.cpu.ra & 0b10000000;
-                nescpu_writemem(am_value.full, v);
+                uint16_t preva = sys.cpu.ra;
+                uint16_t result = preva + (~v) + (sys.cpu.ps.bits.c);
+                sys.cpu.ra = result & 0xFF;
+                sys.cpu.ps.bits.v = !!((preva ^ v) & (preva ^ result) & 0x80);
+                sys.cpu.ps.bits.c = !(result & 0x100);
+                sys.cpu.ps.bits.z = !(sys.cpu.ra);
+                sys.cpu.ps.bits.n = sys.cpu.ra & 0b10000000;
+                syscpu_writemem(am_value.full, v);
                 retval = CPUSTEP_INVALID;
             }
             break;
@@ -666,408 +550,408 @@ int run_instruction(uint8_t in, union splitreg am_value) {
             retval = CPUSTEP_INVALID;
         case IN_SBC:
             {
-                uint8_t v = nescpu_readmem(am_value.full);
-                uint16_t preva = nes.cpu.ra;
-                uint16_t result = preva + (~v) + (nes.cpu.ps.bits.c);
-                nes.cpu.ra = result & 0xFF;
-                nes.cpu.ps.bits.v = !!((preva ^ v) & (preva ^ result) & 0x80);
-                nes.cpu.ps.bits.c = !(result & 0x100);
-                nes.cpu.ps.bits.z = !(nes.cpu.ra);
-                nes.cpu.ps.bits.n = nes.cpu.ra & 0b10000000;
+                uint8_t v = syscpu_readmem(am_value.full);
+                uint16_t preva = sys.cpu.ra;
+                uint16_t result = preva + (~v) + (sys.cpu.ps.bits.c);
+                sys.cpu.ra = result & 0xFF;
+                sys.cpu.ps.bits.v = !!((preva ^ v) & (preva ^ result) & 0x80);
+                sys.cpu.ps.bits.c = !(result & 0x100);
+                sys.cpu.ps.bits.z = !(sys.cpu.ra);
+                sys.cpu.ps.bits.n = sys.cpu.ra & 0b10000000;
             }
             break;
 
         case IN_CPX:
             {
-                uint8_t value = nescpu_readmem(am_value.full);
-                uint8_t result = nes.cpu.rx - value;
-                nes.cpu.ps.bits.c = nes.cpu.rx >= value;
-                nes.cpu.ps.bits.z = !result;
-                nes.cpu.ps.bits.n = result & 0b10000000;
+                uint8_t value = syscpu_readmem(am_value.full);
+                uint8_t result = sys.cpu.rx - value;
+                sys.cpu.ps.bits.c = sys.cpu.rx >= value;
+                sys.cpu.ps.bits.z = !result;
+                sys.cpu.ps.bits.n = result & 0b10000000;
             }
             break;
 
         case IN_CPY:
             {
-                uint8_t value = nescpu_readmem(am_value.full);
-                uint8_t result = nes.cpu.ry - value;
-                nes.cpu.ps.bits.c = nes.cpu.ry >= value;
-                nes.cpu.ps.bits.z = !result;
-                nes.cpu.ps.bits.n = result & 0b10000000;
+                uint8_t value = syscpu_readmem(am_value.full);
+                uint8_t result = sys.cpu.ry - value;
+                sys.cpu.ps.bits.c = sys.cpu.ry >= value;
+                sys.cpu.ps.bits.z = !result;
+                sys.cpu.ps.bits.n = result & 0b10000000;
             }
             break;
 
         case IN_INC:
             {
-                uint8_t result = nescpu_readmem(am_value.full);
-                nescpu_writemem(am_value.full, result);
+                uint8_t result = syscpu_readmem(am_value.full);
+                syscpu_writemem(am_value.full, result);
                 result += 1;
-                nes.cpu.ps.bits.z = !result;
-                nes.cpu.ps.bits.n = result & 0b10000000;
-                nescpu_writemem(am_value.full, result);
+                sys.cpu.ps.bits.z = !result;
+                sys.cpu.ps.bits.n = result & 0b10000000;
+                syscpu_writemem(am_value.full, result);
             }
             break;
 
         case IN_DEC:
             {
-                uint8_t result = nescpu_readmem(am_value.full);
-                nescpu_writemem(am_value.full, result);
+                uint8_t result = syscpu_readmem(am_value.full);
+                syscpu_writemem(am_value.full, result);
                 result -= 1;
-                nes.cpu.ps.bits.z = !result;
-                nes.cpu.ps.bits.n = result & 0b10000000;
-                nescpu_writemem(am_value.full, result);
+                sys.cpu.ps.bits.z = !result;
+                sys.cpu.ps.bits.n = result & 0b10000000;
+                syscpu_writemem(am_value.full, result);
             }
             break;
 
         case IN_DEX:
             {
-                uint8_t result = (nes.cpu.rx -= 1);
-                nes.cpu.ps.bits.z = !result;
-                nes.cpu.ps.bits.n = result & 0b10000000;
+                uint8_t result = (sys.cpu.rx -= 1);
+                sys.cpu.ps.bits.z = !result;
+                sys.cpu.ps.bits.n = result & 0b10000000;
             }
             break;
             
         case IN_DEY:
             {
-                uint8_t result = (nes.cpu.ry -= 1);
-                nes.cpu.ps.bits.z = !result;
-                nes.cpu.ps.bits.n = result & 0b10000000;
+                uint8_t result = (sys.cpu.ry -= 1);
+                sys.cpu.ps.bits.z = !result;
+                sys.cpu.ps.bits.n = result & 0b10000000;
             }
             break;
             
         case IN_INX:
             {
-                uint8_t result = (nes.cpu.rx += 1);
-                nes.cpu.ps.bits.z = !result;
-                nes.cpu.ps.bits.n = result & 0b10000000;
+                uint8_t result = (sys.cpu.rx += 1);
+                sys.cpu.ps.bits.z = !result;
+                sys.cpu.ps.bits.n = result & 0b10000000;
             }
             break;
 
         case IN_INY:
             {
-                uint8_t result = (nes.cpu.ry += 1);
-                nes.cpu.ps.bits.z = !result;
-                nes.cpu.ps.bits.n = result & 0b10000000;
+                uint8_t result = (sys.cpu.ry += 1);
+                sys.cpu.ps.bits.z = !result;
+                sys.cpu.ps.bits.n = result & 0b10000000;
             }
             break;
 
         case IN_ASLA:
             {
-                nes.cpu.ps.bits.c = nes.cpu.ra & 0b10000000;
-                nes.cpu.ra <<= 1;
-                nes.cpu.ps.bits.z = !nes.cpu.ra;
-                nes.cpu.ps.bits.n = nes.cpu.ra & 0b10000000;
+                sys.cpu.ps.bits.c = sys.cpu.ra & 0b10000000;
+                sys.cpu.ra <<= 1;
+                sys.cpu.ps.bits.z = !sys.cpu.ra;
+                sys.cpu.ps.bits.n = sys.cpu.ra & 0b10000000;
             }
             break;
 
         case IN_ASL:
             {
-                uint8_t result = nescpu_readmem(am_value.full);
-                nescpu_writemem(am_value.full, result);
+                uint8_t result = syscpu_readmem(am_value.full);
+                syscpu_writemem(am_value.full, result);
                 uint8_t before = result;
                 result <<= 1;
-                nes.cpu.ps.bits.c = before & 0b10000000;
-                nes.cpu.ps.bits.z = !result;
-                nes.cpu.ps.bits.n = result & 0b10000000;
-                nescpu_writemem(am_value.full, result);
+                sys.cpu.ps.bits.c = before & 0b10000000;
+                sys.cpu.ps.bits.z = !result;
+                sys.cpu.ps.bits.n = result & 0b10000000;
+                syscpu_writemem(am_value.full, result);
             }
             break;
 
         case IX_SLO:
             {
-                uint8_t result = nescpu_readmem(am_value.full);
-                nescpu_writemem(am_value.full, result);
+                uint8_t result = syscpu_readmem(am_value.full);
+                syscpu_writemem(am_value.full, result);
                 uint8_t before = result;
                 result <<= 1;
-                nes.cpu.ra |= result;
-                nes.cpu.ps.bits.c = before & 0b10000000;
-                nes.cpu.ps.bits.z = !nes.cpu.ra;
-                nes.cpu.ps.bits.n = nes.cpu.ra & 0b10000000;
-                nescpu_writemem(am_value.full, result);
+                sys.cpu.ra |= result;
+                sys.cpu.ps.bits.c = before & 0b10000000;
+                sys.cpu.ps.bits.z = !sys.cpu.ra;
+                sys.cpu.ps.bits.n = sys.cpu.ra & 0b10000000;
+                syscpu_writemem(am_value.full, result);
                 retval = CPUSTEP_INVALID;
             }
             break;
 
         case IN_BIT:
             {
-                uint8_t result = nescpu_readmem(am_value.full);
-                nes.cpu.ps.bits.v = result & 0b01000000;
-                nes.cpu.ps.bits.n = result & 0b10000000;
-                nes.cpu.ps.bits.z = !(result & nes.cpu.ra);
+                uint8_t result = syscpu_readmem(am_value.full);
+                sys.cpu.ps.bits.v = result & 0b01000000;
+                sys.cpu.ps.bits.n = result & 0b10000000;
+                sys.cpu.ps.bits.z = !(result & sys.cpu.ra);
             }
             break;
 
         case IN_LSRA:
             {
-                nes.cpu.ps.bits.c = nes.cpu.ra & 0x01;
-                nes.cpu.ra >>= 1;
-                nes.cpu.ps.bits.z = !nes.cpu.ra;
-                nes.cpu.ps.bits.n = 0;
+                sys.cpu.ps.bits.c = sys.cpu.ra & 0x01;
+                sys.cpu.ra >>= 1;
+                sys.cpu.ps.bits.z = !sys.cpu.ra;
+                sys.cpu.ps.bits.n = 0;
             }
             break;
 
         case IN_LSR:
             {
-                uint8_t result = nescpu_readmem(am_value.full);
-                nescpu_writemem(am_value.full, result);
+                uint8_t result = syscpu_readmem(am_value.full);
+                syscpu_writemem(am_value.full, result);
                 uint8_t before = result;
                 result >>= 1;
-                nes.cpu.ps.bits.c = before & 0b00000001;
-                nes.cpu.ps.bits.z = !result;
-                nes.cpu.ps.bits.n = result & 0b10000000;
-                nescpu_writemem(am_value.full, result);
+                sys.cpu.ps.bits.c = before & 0b00000001;
+                sys.cpu.ps.bits.z = !result;
+                sys.cpu.ps.bits.n = result & 0b10000000;
+                syscpu_writemem(am_value.full, result);
             }
             break;
 
         case IX_SRE:
             {
-                uint8_t result = nescpu_readmem(am_value.full);
-                nescpu_writemem(am_value.full, result);
+                uint8_t result = syscpu_readmem(am_value.full);
+                syscpu_writemem(am_value.full, result);
                 uint8_t before = result;
                 result >>= 1;
-                nes.cpu.ra ^= result;
-                nes.cpu.ps.bits.c = before & 0b00000001;
-                nes.cpu.ps.bits.z = !nes.cpu.ra;
-                nes.cpu.ps.bits.n = nes.cpu.ra & 0b10000000;
-                nescpu_writemem(am_value.full, result);
+                sys.cpu.ra ^= result;
+                sys.cpu.ps.bits.c = before & 0b00000001;
+                sys.cpu.ps.bits.z = !sys.cpu.ra;
+                sys.cpu.ps.bits.n = sys.cpu.ra & 0b10000000;
+                syscpu_writemem(am_value.full, result);
                 retval = CPUSTEP_INVALID;
             }
             break;
 
         case IN_ROLA:
             {
-                bool carry = nes.cpu.ps.bits.c;
-                nes.cpu.ps.bits.c = nes.cpu.ra & 0b10000000;
-                nes.cpu.ra = (nes.cpu.ra << 1) | carry;
-                nes.cpu.ps.bits.z = !nes.cpu.ra;
-                nes.cpu.ps.bits.n = nes.cpu.ra & 0b10000000;
+                bool carry = sys.cpu.ps.bits.c;
+                sys.cpu.ps.bits.c = sys.cpu.ra & 0b10000000;
+                sys.cpu.ra = (sys.cpu.ra << 1) | carry;
+                sys.cpu.ps.bits.z = !sys.cpu.ra;
+                sys.cpu.ps.bits.n = sys.cpu.ra & 0b10000000;
             }
             break;
 
         case IX_RLA:
             {
-                uint8_t result = nescpu_readmem(am_value.full);
-                nescpu_writemem(am_value.full, result);
+                uint8_t result = syscpu_readmem(am_value.full);
+                syscpu_writemem(am_value.full, result);
                 uint8_t before = result;
-                uint8_t carry = nes.cpu.ps.bits.c;
+                uint8_t carry = sys.cpu.ps.bits.c;
                 result = (result << 1) | carry;
-                nes.cpu.ra &= result;
-                nes.cpu.ps.bits.c = before & 0b10000000;
-                nes.cpu.ps.bits.z = !nes.cpu.ra;
-                nes.cpu.ps.bits.n = nes.cpu.ra & 0b10000000;
-                nescpu_writemem(am_value.full, result);
+                sys.cpu.ra &= result;
+                sys.cpu.ps.bits.c = before & 0b10000000;
+                sys.cpu.ps.bits.z = !sys.cpu.ra;
+                sys.cpu.ps.bits.n = sys.cpu.ra & 0b10000000;
+                syscpu_writemem(am_value.full, result);
                 retval = CPUSTEP_INVALID;
             }
             break;
 
         case IX_RRA:
             {
-                uint8_t v = nescpu_readmem(am_value.full);
-                nescpu_writemem(am_value.full, v);
-                uint8_t carry = nes.cpu.ps.bits.c;
-                nes.cpu.ps.bits.c = (v & 0b00000001);
+                uint8_t v = syscpu_readmem(am_value.full);
+                syscpu_writemem(am_value.full, v);
+                uint8_t carry = sys.cpu.ps.bits.c;
+                sys.cpu.ps.bits.c = (v & 0b00000001);
                 v = (v >> 1) | (carry << 7);
-                uint16_t preva = nes.cpu.ra;
-                uint16_t result = (int) preva + v + nes.cpu.ps.bits.c;
-                nes.cpu.ps.bits.v = !!(~(preva ^ v) & (preva ^ result) & 0x80);
-                nes.cpu.ra = result & 0xFF;
-                nes.cpu.ps.bits.c = !!(result & 0x100);
-                nes.cpu.ps.bits.z = !nes.cpu.ra;
-                nes.cpu.ps.bits.n = nes.cpu.ra & 0b10000000;
-                nescpu_writemem(am_value.full, v);
+                uint16_t preva = sys.cpu.ra;
+                uint16_t result = (int) preva + v + sys.cpu.ps.bits.c;
+                sys.cpu.ps.bits.v = !!(~(preva ^ v) & (preva ^ result) & 0x80);
+                sys.cpu.ra = result & 0xFF;
+                sys.cpu.ps.bits.c = !!(result & 0x100);
+                sys.cpu.ps.bits.z = !sys.cpu.ra;
+                sys.cpu.ps.bits.n = sys.cpu.ra & 0b10000000;
+                syscpu_writemem(am_value.full, v);
                 retval = CPUSTEP_INVALID;
             }
             break;
 
         case IN_ROL:
             {
-                uint8_t result = nescpu_readmem(am_value.full);
-                nescpu_writemem(am_value.full, result);
+                uint8_t result = syscpu_readmem(am_value.full);
+                syscpu_writemem(am_value.full, result);
                 uint8_t before = result;
-                uint8_t carry = (nes.cpu.ps.bits.c) ? 1 : 0;
+                uint8_t carry = (sys.cpu.ps.bits.c) ? 1 : 0;
                 result = (result << 1) | carry;
-                nes.cpu.ps.bits.c = before & 0b10000000;
-                nes.cpu.ps.bits.z = !result;
-                nes.cpu.ps.bits.n = result & 0b10000000;
-                nescpu_writemem(am_value.full, result);
+                sys.cpu.ps.bits.c = before & 0b10000000;
+                sys.cpu.ps.bits.z = !result;
+                sys.cpu.ps.bits.n = result & 0b10000000;
+                syscpu_writemem(am_value.full, result);
             }
             break;
 
         case IN_RORA:
             {
-                bool carry = nes.cpu.ps.bits.c;
-                nes.cpu.ps.bits.c = nes.cpu.ra & 0b00000001;
-                nes.cpu.ra = (nes.cpu.ra >> 1) | (carry << 7);
-                nes.cpu.ps.bits.z = !nes.cpu.ra;
-                nes.cpu.ps.bits.n = !!carry;
+                bool carry = sys.cpu.ps.bits.c;
+                sys.cpu.ps.bits.c = sys.cpu.ra & 0b00000001;
+                sys.cpu.ra = (sys.cpu.ra >> 1) | (carry << 7);
+                sys.cpu.ps.bits.z = !sys.cpu.ra;
+                sys.cpu.ps.bits.n = !!carry;
             }
             break;
 
         case IN_ROR:
             {
-                uint8_t result = nescpu_readmem(am_value.full);
-                nescpu_writemem(am_value.full, result);
+                uint8_t result = syscpu_readmem(am_value.full);
+                syscpu_writemem(am_value.full, result);
                 uint8_t before = result;
-                uint8_t carry = (nes.cpu.ps.bits.c) ? 1 : 0;
+                uint8_t carry = (sys.cpu.ps.bits.c) ? 1 : 0;
                 result = (result >> 1) | (carry << 7);
-                nes.cpu.ps.bits.z = !result;
-                nes.cpu.ps.bits.c = before & 1;
-                nes.cpu.ps.bits.n = !!carry;
-                nescpu_writemem(am_value.full, result);
+                sys.cpu.ps.bits.z = !result;
+                sys.cpu.ps.bits.c = before & 1;
+                sys.cpu.ps.bits.n = !!carry;
+                syscpu_writemem(am_value.full, result);
             }
             break;
 
         case IN_EOR:
             {
-                uint8_t result = (nes.cpu.ra ^= nescpu_readmem(am_value.full));
-                nes.cpu.ps.bits.z = !result;
-                nes.cpu.ps.bits.n = result & 0b10000000;
+                uint8_t result = (sys.cpu.ra ^= syscpu_readmem(am_value.full));
+                sys.cpu.ps.bits.z = !result;
+                sys.cpu.ps.bits.n = result & 0b10000000;
             }
             break;
 
         case IN_CMP:
             {
-                uint8_t value = nescpu_readmem(am_value.full);
-                uint8_t result = nes.cpu.ra - value;
-                nes.cpu.ps.bits.c = nes.cpu.ra >= value;
-                nes.cpu.ps.bits.z = !result;
-                nes.cpu.ps.bits.n = result & 0b10000000;
+                uint8_t value = syscpu_readmem(am_value.full);
+                uint8_t result = sys.cpu.ra - value;
+                sys.cpu.ps.bits.c = sys.cpu.ra >= value;
+                sys.cpu.ps.bits.z = !result;
+                sys.cpu.ps.bits.n = result & 0b10000000;
             }
             break;
 
         case IX_DCP:
             {
-                uint8_t value = nescpu_readmem(am_value.full);
-                nescpu_writemem(am_value.full, value);
+                uint8_t value = syscpu_readmem(am_value.full);
+                syscpu_writemem(am_value.full, value);
                 value -= 1;
-                int result = nes.cpu.ra - value;
-                nes.cpu.ps.bits.c = result >= 0;
-                nes.cpu.ps.bits.z = result == 0;
-                nes.cpu.ps.bits.n = result & 0b10000000;
-                nescpu_writemem(am_value.full, value);
+                int result = sys.cpu.ra - value;
+                sys.cpu.ps.bits.c = result >= 0;
+                sys.cpu.ps.bits.z = result == 0;
+                sys.cpu.ps.bits.n = result & 0b10000000;
+                syscpu_writemem(am_value.full, value);
                 retval = CPUSTEP_INVALID;
             }
             break;
 
         case IN_AND:
             {
-                uint8_t result = (nes.cpu.ra &= nescpu_readmem(am_value.full));
-                nes.cpu.ps.bits.z = !result;
-                nes.cpu.ps.bits.n = result & 0b10000000;
+                uint8_t result = (sys.cpu.ra &= syscpu_readmem(am_value.full));
+                sys.cpu.ps.bits.z = !result;
+                sys.cpu.ps.bits.n = result & 0b10000000;
             }
             break;
 
         case IN_BCC:
-            if (!(nes.cpu.ps.bits.c)) in_branch(am_value);
+            if (!(sys.cpu.ps.bits.c)) in_branch(am_value);
             break;
 
         case IN_BCS:
-            if ( (nes.cpu.ps.bits.c)) in_branch(am_value);
+            if ( (sys.cpu.ps.bits.c)) in_branch(am_value);
             break;
         case IN_BEQ:
-            if ( (nes.cpu.ps.bits.z)) in_branch(am_value);
+            if ( (sys.cpu.ps.bits.z)) in_branch(am_value);
             break;
         case IN_BNE:
-            if (!(nes.cpu.ps.bits.z)) in_branch(am_value);
+            if (!(sys.cpu.ps.bits.z)) in_branch(am_value);
             break;
         case IN_BMI:
-            if ( (nes.cpu.ps.bits.n)) in_branch(am_value);
+            if ( (sys.cpu.ps.bits.n)) in_branch(am_value);
             break;
         case IN_BPL:
-            if (!(nes.cpu.ps.bits.n)) in_branch(am_value);
+            if (!(sys.cpu.ps.bits.n)) in_branch(am_value);
             break;
         case IN_BVC:
-            if (!(nes.cpu.ps.bits.v)) in_branch(am_value);
+            if (!(sys.cpu.ps.bits.v)) in_branch(am_value);
             break;
         case IN_BVS:
-            if ( (nes.cpu.ps.bits.v)) in_branch(am_value);
+            if ( (sys.cpu.ps.bits.v)) in_branch(am_value);
             break;
 
-        case IN_CLC: nes.cpu.ps.bits.c = 0; break;
-        case IN_CLI: nes.cpu.ps.bits.i = 0; break;
-        case IN_CLV: nes.cpu.ps.bits.v = 0; break;
+        case IN_CLC: sys.cpu.ps.bits.c = 0; break;
+        case IN_CLI: sys.cpu.ps.bits.i = 0; break;
+        case IN_CLV: sys.cpu.ps.bits.v = 0; break;
 
-        case IN_SEC: nes.cpu.ps.bits.c = 1; break;
-        case IN_SEI: nes.cpu.ps.bits.i = 1; break;
+        case IN_SEC: sys.cpu.ps.bits.c = 1; break;
+        case IN_SEI: sys.cpu.ps.bits.i = 1; break;
 
         case IN_TAX:
             {
-                uint8_t result = (nes.cpu.rx = nes.cpu.ra);
-                nes.cpu.ps.bits.z = !result;
-                nes.cpu.ps.bits.n = result & 0b10000000;
+                uint8_t result = (sys.cpu.rx = sys.cpu.ra);
+                sys.cpu.ps.bits.z = !result;
+                sys.cpu.ps.bits.n = result & 0b10000000;
             }
             break;
         case IN_TAY:
             {
-            uint8_t result = (nes.cpu.ry = nes.cpu.ra);
-                nes.cpu.ps.bits.z = !result;
-                nes.cpu.ps.bits.n = result & 0b10000000;
+            uint8_t result = (sys.cpu.ry = sys.cpu.ra);
+                sys.cpu.ps.bits.z = !result;
+                sys.cpu.ps.bits.n = result & 0b10000000;
             }
             break;
         case IN_TSX:
             {
-                uint8_t result = (nes.cpu.rx = nes.cpu.rsp);
-                nes.cpu.ps.bits.z = !result;
-                nes.cpu.ps.bits.n = result & 0b10000000;
+                uint8_t result = (sys.cpu.rx = sys.cpu.rsp);
+                sys.cpu.ps.bits.z = !result;
+                sys.cpu.ps.bits.n = result & 0b10000000;
             }
             break;
         case IN_TXA:
             {
-                uint8_t result = (nes.cpu.ra = nes.cpu.rx);
-                nes.cpu.ps.bits.z = !result;
-                nes.cpu.ps.bits.n = result & 0b10000000;
+                uint8_t result = (sys.cpu.ra = sys.cpu.rx);
+                sys.cpu.ps.bits.z = !result;
+                sys.cpu.ps.bits.n = result & 0b10000000;
             }
             break;
         case IN_TXS:
-            nes.cpu.rsp = nes.cpu.rx;
+            sys.cpu.rsp = sys.cpu.rx;
             break;
         case IN_TYA:
             {
-                uint8_t result = (nes.cpu.ra = nes.cpu.ry);
-                nes.cpu.ps.bits.z = !result;
-                nes.cpu.ps.bits.n = result & 0b10000000;
+                uint8_t result = (sys.cpu.ra = sys.cpu.ry);
+                sys.cpu.ps.bits.z = !result;
+                sys.cpu.ps.bits.n = result & 0b10000000;
             }
             break;
 
         case IN_ORA:
             {
-                uint8_t result = (nes.cpu.ra |= nescpu_readmem(am_value.full));
-                nes.cpu.ps.bits.z = !result;
-                nes.cpu.ps.bits.n = result & 0b10000000;
+                uint8_t result = (sys.cpu.ra |= syscpu_readmem(am_value.full));
+                sys.cpu.ps.bits.z = !result;
+                sys.cpu.ps.bits.n = result & 0b10000000;
             }
             break;
 
         case IN_LDA:
             {
-                uint8_t result = (nes.cpu.ra = nescpu_readmem(am_value.full));
-                nes.cpu.ps.bits.z = !result;
-                nes.cpu.ps.bits.n = result & 0b10000000;
+                uint8_t result = (sys.cpu.ra = syscpu_readmem(am_value.full));
+                sys.cpu.ps.bits.z = !result;
+                sys.cpu.ps.bits.n = result & 0b10000000;
             }
             break;
 
         case IN_LDY:
             {
-                uint8_t result = (nes.cpu.ry = nescpu_readmem(am_value.full));
-                nes.cpu.ps.bits.z = !result;
-                nes.cpu.ps.bits.n = result & 0b10000000;
+                uint8_t result = (sys.cpu.ry = syscpu_readmem(am_value.full));
+                sys.cpu.ps.bits.z = !result;
+                sys.cpu.ps.bits.n = result & 0b10000000;
             }
             break;
 
         case IN_LDX:
             {
-                uint8_t result = (nes.cpu.rx = nescpu_readmem(am_value.full));
-                nes.cpu.ps.bits.z = !result;
-                nes.cpu.ps.bits.n = result & 0b10000000;
+                uint8_t result = (sys.cpu.rx = syscpu_readmem(am_value.full));
+                sys.cpu.ps.bits.z = !result;
+                sys.cpu.ps.bits.n = result & 0b10000000;
             }
             break;
         
         case IX_AXS:
             {
-                int result = (nes.cpu.ra & nes.cpu.rx) - nescpu_readmem(am_value.full);
-                nes.cpu.ps.bits.c = (result >= 0);
-                nes.cpu.ps.bits.z = (result == 0);
-                nes.cpu.rx = result & 0xFF;
-                nes.cpu.ps.bits.n = result & 0b10000000;
+                int result = (sys.cpu.ra & sys.cpu.rx) - syscpu_readmem(am_value.full);
+                sys.cpu.ps.bits.c = (result >= 0);
+                sys.cpu.ps.bits.z = (result == 0);
+                sys.cpu.rx = result & 0xFF;
+                sys.cpu.ps.bits.n = result & 0b10000000;
                 retval = CPUSTEP_INVALID;
             }
             break;
@@ -1075,134 +959,133 @@ int run_instruction(uint8_t in, union splitreg am_value) {
         case IX_ATX:
         case IX_LAX:
             {
-                uint8_t result = (nes.cpu.rx = nes.cpu.ra = nescpu_readmem(am_value.full));
-                nes.cpu.ps.bits.z = !result;
-                nes.cpu.ps.bits.n = result & 0b10000000;
+                uint8_t result = (sys.cpu.rx = sys.cpu.ra = syscpu_readmem(am_value.full));
+                sys.cpu.ps.bits.z = !result;
+                sys.cpu.ps.bits.n = result & 0b10000000;
                 retval = CPUSTEP_INVALID;
             }
             break;
 
         case IN_STA:
-            nescpu_writemem(am_value.full, nes.cpu.ra);
+            syscpu_writemem(am_value.full, sys.cpu.ra);
             break;
 
         case IN_STX:
-            nescpu_writemem(am_value.full, nes.cpu.rx);
+            syscpu_writemem(am_value.full, sys.cpu.rx);
             break;
 
         case IN_STY:
-            nescpu_writemem(am_value.full, nes.cpu.ry);
+            syscpu_writemem(am_value.full, sys.cpu.ry);
             break;
 
         case IN_JMP:
-            nes.cpu.pc.full = am_value.full;
+            sys.cpu.pc.full = am_value.full;
             break;
         
         case IN_JMPI:
             {
-                nes.cpu.pc.value.lo = nescpu_readmem(am_value.full);
+                sys.cpu.pc.value.lo = syscpu_readmem(am_value.full);
                 am_value.value.lo += 1;
-                nes.cpu.pc.value.hi = nescpu_readmem(am_value.full);
+                sys.cpu.pc.value.hi = syscpu_readmem(am_value.full);
             }
             break;
 
         case IN_JSR:
             {
-                uint8_t v = nescpu_readmem(nes.cpu.pc.full ++);
-                nescpu_readmem(0x100 | nes.cpu.rsp);
-                nescpu_writemem(0x100 | nes.cpu.rsp --, nes.cpu.pc.value.hi);
-                nescpu_writemem(0x100 | nes.cpu.rsp --, nes.cpu.pc.value.lo);
-                nes.cpu.pc.value.hi = nescpu_readmem(nes.cpu.pc.full);
-                nes.cpu.pc.value.lo = v;
+                uint8_t v = syscpu_readmem(sys.cpu.pc.full ++);
+                syscpu_readmem(0x100 | sys.cpu.rsp);
+                syscpu_writemem(0x100 | sys.cpu.rsp --, sys.cpu.pc.value.hi);
+                syscpu_writemem(0x100 | sys.cpu.rsp --, sys.cpu.pc.value.lo);
+                sys.cpu.pc.value.hi = syscpu_readmem(sys.cpu.pc.full);
+                sys.cpu.pc.value.lo = v;
             }
             break;
 
         case IN_RTS:
-            nescpu_readmem(0x100 | nes.cpu.rsp);
-            nes.cpu.pc.value.lo = nescpu_readmem(0x100 | ++ nes.cpu.rsp);
-            nes.cpu.pc.value.hi = nescpu_readmem(0x100 | ++ nes.cpu.rsp);
-            nescpu_readmem(nes.cpu.pc.full ++);
-            if (nes.cpu.rsp == 0xFF) retval = CPUSTEP_RTS;
+            syscpu_readmem(0x100 | sys.cpu.rsp);
+            sys.cpu.pc.value.lo = syscpu_readmem(0x100 | ++ sys.cpu.rsp);
+            sys.cpu.pc.value.hi = syscpu_readmem(0x100 | ++ sys.cpu.rsp);
+            syscpu_readmem(sys.cpu.pc.full ++);
+            if (sys.cpu.rsp == 0xFF) retval = CPUSTEP_RTS;
             break;
 
         case IN_RTI:
-            nescpu_readmem(0x100 | nes.cpu.rsp);
-            nes.cpu.ps.field = nescpu_readmem(0x100 | ++ nes.cpu.rsp);
-            nes.cpu.pc.value.lo = nescpu_readmem(0x100 | ++ nes.cpu.rsp);
-            nes.cpu.pc.value.hi = nescpu_readmem(0x100 | ++ nes.cpu.rsp);
+            syscpu_readmem(0x100 | sys.cpu.rsp);
+            sys.cpu.ps.field = syscpu_readmem(0x100 | ++ sys.cpu.rsp);
+            sys.cpu.pc.value.lo = syscpu_readmem(0x100 | ++ sys.cpu.rsp);
+            sys.cpu.pc.value.hi = syscpu_readmem(0x100 | ++ sys.cpu.rsp);
             break;
 
         case IN_PHA:
-            nescpu_writemem(0x100 | nes.cpu.rsp --, nes.cpu.ra);
+            syscpu_writemem(0x100 | sys.cpu.rsp --, sys.cpu.ra);
             break;
 
         case IN_PHP:
-            nescpu_writemem(0x100 | nes.cpu.rsp --, nes.cpu.ps.field | 0x10);
+            syscpu_writemem(0x100 | sys.cpu.rsp --, sys.cpu.ps.field | 0x10);
             break;
 
         case IN_PLA:
             {
-                nescpu_readmem(0x100 | nes.cpu.rsp);
-                uint8_t result = (nes.cpu.ra = nescpu_readmem(0x100 | ++ nes.cpu.rsp));
-                nes.cpu.ps.bits.z = !result;
-                nes.cpu.ps.bits.n = result & 0b10000000;
+                syscpu_readmem(0x100 | sys.cpu.rsp);
+                uint8_t result = (sys.cpu.ra = syscpu_readmem(0x100 | ++ sys.cpu.rsp));
+                sys.cpu.ps.bits.z = !result;
+                sys.cpu.ps.bits.n = result & 0b10000000;
             }
             break;
 
         case IN_PLP:
             {
-                nescpu_readmem(0x100 | nes.cpu.rsp);
-                nes.cpu.ps.field = nescpu_readmem(0x100 | ++ nes.cpu.rsp);
+                syscpu_readmem(0x100 | sys.cpu.rsp);
+                sys.cpu.ps.field = syscpu_readmem(0x100 | ++ sys.cpu.rsp);
             }
             break;
 
 
         case IX_SAX:
             {
-                nescpu_writemem(am_value.full, nes.cpu.ra & nes.cpu.rx);
+                syscpu_writemem(am_value.full, sys.cpu.ra & sys.cpu.rx);
                 retval = CPUSTEP_INVALID;
             }
             break;
 
         case IX_AAC:
             {
-                nes.cpu.ra &= nescpu_readmem(am_value.full);
-                nes.cpu.ps.bits.z = !nes.cpu.ra;
-                nes.cpu.ps.bits.c = nes.cpu.ps.bits.n = nes.cpu.ra & 0b10000000;
+                sys.cpu.ra &= syscpu_readmem(am_value.full);
+                sys.cpu.ps.bits.z = !sys.cpu.ra;
+                sys.cpu.ps.bits.c = sys.cpu.ps.bits.n = sys.cpu.ra & 0b10000000;
                 retval = CPUSTEP_INVALID;
             }
             break;
 
         case IX_ARR:
             {
-                nes.cpu.ra = ((nes.cpu.ra & nescpu_readmem(am_value.full) >> 1) | (nes.cpu.ps.bits.c << 7));
-                uint8_t result = nes.cpu.ra;
-                nes.cpu.ps.bits.z = !result;
-                nes.cpu.ps.bits.n = result & 0b10000000;
-                nes.cpu.ps.bits.c = result & 0b01000000;
-                nes.cpu.ps.bits.v = nes.cpu.ps.bits.c ^ (result & 0b00100000);
+                sys.cpu.ra = ((sys.cpu.ra & syscpu_readmem(am_value.full) >> 1) | (sys.cpu.ps.bits.c << 7));
+                uint8_t result = sys.cpu.ra;
+                sys.cpu.ps.bits.z = !result;
+                sys.cpu.ps.bits.n = result & 0b10000000;
+                sys.cpu.ps.bits.c = result & 0b01000000;
+                sys.cpu.ps.bits.v = sys.cpu.ps.bits.c ^ (result & 0b00100000);
                 retval = CPUSTEP_INVALID;
             }
             break;
 
         case IX_ASR:
             {
-                uint8_t result = (nes.cpu.ra &= nescpu_readmem(am_value.full));
-                nes.cpu.ps.bits.c = (result & 0x01);
-                result = (nes.cpu.ra >>= 1);
-                nes.cpu.ps.bits.z = !result;
-                nes.cpu.ps.bits.n = 0;
+                uint8_t result = (sys.cpu.ra &= syscpu_readmem(am_value.full));
+                sys.cpu.ps.bits.c = (result & 0x01);
+                result = (sys.cpu.ra >>= 1);
+                sys.cpu.ps.bits.z = !result;
+                sys.cpu.ps.bits.n = 0;
                 retval = CPUSTEP_INVALID;
             }
             break;
 
         case IX_NOP:
-            nescpu_readmem(am_value.full);
+            syscpu_readmem(am_value.full);
             retval = CPUSTEP_INVALID;
             break;
 
         case IN_NOP:
-            retval = CPUSTEP_NOP;
             break;
 
         case IX_HLT:
@@ -1212,50 +1095,53 @@ int run_instruction(uint8_t in, union splitreg am_value) {
             retval = CPUSTEP_INVALID;
             break;
     }
-    if (nes.cpu.lastnmi) {
-        nescpu_donmi();
-        nes.cpu.wantnmi = 0;
-        return retval | CPUSTEP_NMI;
-    }
-    if (nes.cpu.lastirq) {
-        nescpu_doirq();
+    if (sys.cpu.lastirq) {
+        syscpu_doirq();
     }
     return retval;
 }
 
 
-int nescpu_step(void) {
-    uint8_t opcode = nescpu_readmem(nes.cpu.pc.full);
-    uint16_t op = NESCPU_OPS[opcode];
+int syscpu_step(void) {
+    uint8_t opcode = syscpu_readmem(sys.cpu.pc.full);
+    uint16_t op = syscpu_ops[opcode];
     uint16_t am = op & 0b11110000000;
     uint16_t in = op & 0b00001111111;
-    nes.cpu.pc.full += 1;
+    sys.cpu.pc.full += 1;
     union splitreg am_value = run_addressingmode(am);
     return run_instruction(in, am_value);
 }
 
-void nescpu_initialize(void) {
-    nesc_memset(&nes.cpu, 0, sizeof(struct nescpu));
+void syscpu_poweron(void) {
+    memset(&sys.cpu, 0, sizeof(struct syscpu));
+    sys.cpu.pc.full = 0x8000;
+    sys.cpu.ps.field = 0x20;
+    sys.cpu.ra = 0;
+    sys.cpu.rx = 0;
+    sys.cpu.ry = 0;
+    sys.cpu.rsp = 0;
+    sys.cpu.cycles = 0;
 }
 
-void nescpu_poweron(void) {
-    nesc_memset(&nes.cpu, 0, sizeof(struct nescpu));
-    nes.cpu.pc.full = 0x0000;
-    nes.cpu.ps.field = 0x20;
-    nes.cpu.ra = 0;
-    nes.cpu.rx = 0;
-    nes.cpu.ry = 0;
-    nes.cpu.rsp = 0;
-    nes.cpu.cycles = 0;
+void syscpu_reset(void) {
+    syscpu_readmem(sys.cpu.pc.full);
+    syscpu_readmem(sys.cpu.pc.full);
+	syscpu_readmem(0x100 | sys.cpu.rsp --);
+	syscpu_readmem(0x100 | sys.cpu.rsp --);
+	syscpu_readmem(0x100 | sys.cpu.rsp --);
+    sys.cpu.ps.bits.i = 1;
+	sys.cpu.pc.full = 0x8000;
 }
 
-void nescpu_reset(void) {
-    nescpu_readmem(nes.cpu.pc.full);
-    nescpu_readmem(nes.cpu.pc.full);
-	nescpu_readmem(0x100 | nes.cpu.rsp --);
-	nescpu_readmem(0x100 | nes.cpu.rsp --);
-	nescpu_readmem(0x100 | nes.cpu.rsp --);
-    nes.cpu.ps.bits.i = 1;
-	nes.cpu.pc.value.lo = nescpu_readmem(0xFFFC);
-	nes.cpu.pc.value.hi = nescpu_readmem(0xFFFD);
+void sys_reset(bool hard) {
+    if (hard) {
+        syscpu_poweron();
+    }
+    syscpu_reset();
+    sys.cpu.cycles = 0;
+}
+
+void sys_step(void) {
+    syscpu_printstate();
+    syscpu_step();
 }

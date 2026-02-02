@@ -40,7 +40,7 @@ MODCHECK      = $3      ; divisibility flag
 
 DivideBy3:
     ldy #3              ; select divisor
-    jmp DivideByY       ;
+    .byte $2C           ;
 
 DivideBy5:
     ldy #5              ; select divisor

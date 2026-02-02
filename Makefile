@@ -1,6 +1,6 @@
 DEPDIR := .deps
 DEPFLAGS = -MT $@ -MMD -MP -MF $(DEPDIR)/$*.d
-CFLAGS = -g -O2 -I. -I./include -I./src -I./src/nes -I./src/cpu $(DEPFLAGS)
+CFLAGS = -g -O2 $(DEPFLAGS)
 INSTALL_DIR = /usr/local
 
 phony: t65
