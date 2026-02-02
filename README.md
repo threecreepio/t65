@@ -45,10 +45,10 @@ If an RTS is executed from the top of the stack the program will exit with the A
 
 There are custom registers to perform useful things.
 
-`$5000` - print an ASCII character to stdout
-`$5001` - switch tracing on (1) or off (0) and resets the cycle counter to 0
-`$5002` - enable tracing and trigger breakpoint
-`$5003` - exit application with a return code
+`$5000` - print an ASCII character to stdout  
+`$5001` - switch tracing on (1) or off (0) and resets the cycle counter to 0  
+`$5002` - enable tracing and trigger breakpoint  
+`$5003` - exit application with a return code  
 
 ## Example source file
 
